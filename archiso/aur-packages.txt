@@ -1,0 +1,10 @@
+# Pacotes do AUR compilados na build e colocados num repositorio local.
+# Formato:  nome  obrigatorio|opcional
+# "obrigatorio": se falhar, a build para.
+# "opcional": se falhar, segue sem ele.
+ckbcomp             obrigatorio
+calamares           obrigatorio
+xpadneo-dkms        opcional
+xone-dkms           opcional
+xone-dongle-firmware opcional
+game-devices-udev   opcional

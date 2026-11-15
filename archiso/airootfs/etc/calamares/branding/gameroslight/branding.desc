@@ -1,0 +1,47 @@
+---
+componentName:  gameroslight
+
+welcomeStyleCalamares:   false
+welcomeExpandingLogo:    true
+windowExpanding:    normal
+windowSize: 1024px,660px
+windowPlacement: center
+sidebar: widget
+navigation: widget
+
+strings:
+    productName:         "Gamer OS Light"
+    shortProductName:    "Gamer OS"
+    version:             "1.0"
+    shortVersion:        "1.0"
+    versionedName:       "Gamer OS Light 1.0"
+    shortVersionedName:  "Gamer OS 1.0"
+    bootloaderEntryName: "Gamer OS Light"
+    productUrl:          ""
+    supportUrl:          ""
+    knownIssuesUrl:      ""
+    releaseNotesUrl:     ""
+    donateUrl:           ""
+
+images:
+    productLogo:         "logo.png"
+    productIcon:         "logo.png"
+    productWelcome:      "welcome.png"
+
+slideshow:               "show.qml"
+slideshowAPI:            2
+
+style:
+    SidebarBackground:        "#0E1022"
+    SidebarText:              "#E8EAFF"
+    SidebarTextCurrent:       "#00E5FF"
+    SidebarBackgroundCurrent: "#1C2145"
+    sidebarBackground:        "#0E1022"
+    sidebarText:              "#E8EAFF"
+    sidebarTextSelect:        "#00E5FF"
+    sidebarSelect:            "#1C2145"
+
+uploadServer :
+    type :    "none"
+    url :     ""
+    sizeLimit : -1

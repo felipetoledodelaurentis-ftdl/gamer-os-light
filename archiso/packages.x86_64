@@ -1,0 +1,127 @@
+# =========================================================
+#  Gamer OS Light - pacotes adicionados ao perfil "releng"
+#  (o script de build junta esta lista com a base do Arch)
+#  Pacotes que nao existirem no repositorio sao ignorados
+#  com aviso, para a build nao quebrar.
+# =========================================================
+
+# --- Kernel, firmware e base -------------------------------
+linux
+linux-headers
+linux-firmware
+amd-ucode
+intel-ucode
+sof-firmware
+dkms
+sudo
+rsync
+squashfs-tools
+os-prober
+ntfs-3g
+dosfstools
+btrfs-progs
+xfsprogs
+e2fsprogs
+efibootmgr
+grub
+lm_sensors
+pciutils
+usbutils
+xdg-user-dirs
+bash-completion
+
+# --- Rede, Bluetooth e audio -------------------------------
+networkmanager
+bluez
+bluez-utils
+pipewire
+pipewire-pulse
+pipewire-alsa
+pipewire-jack
+wireplumber
+lib32-pipewire
+lib32-libpulse
+
+# --- Video: AMD / Intel (codigo aberto) --------------------
+mesa
+lib32-mesa
+vulkan-radeon
+lib32-vulkan-radeon
+vulkan-intel
+lib32-vulkan-intel
+vulkan-icd-loader
+lib32-vulkan-icd-loader
+vulkan-tools
+libva-utils
+xf86-video-amdgpu
+
+# --- Video: NVIDIA (removido na instalacao se nao houver placa NVIDIA)
+nvidia-open
+nvidia-utils
+lib32-nvidia-utils
+nvidia-settings
+
+# --- Desktop KDE Plasma (visual estilo Windows 11) ---------
+plasma-desktop
+plasma-workspace
+plasma-nm
+plasma-pa
+powerdevil
+power-profiles-daemon
+bluedevil
+kscreen
+kinfocenter
+systemsettings
+plasma-systemmonitor
+kde-gtk-config
+breeze
+breeze-gtk
+xdg-desktop-portal-kde
+kwallet-pam
+sddm
+sddm-kcm
+discover
+flatpak
+packagekit-qt6
+
+# --- Fontes ------------------------------------------------
+noto-fonts
+noto-fonts-emoji
+noto-fonts-cjk
+ttf-liberation
+ttf-dejavu
+
+# --- Aplicativos basicos -----------------------------------
+dolphin
+konsole
+kate
+ark
+gwenview
+okular
+spectacle
+kcalc
+partitionmanager
+vlc
+firefox
+firefox-i18n-pt-br
+libreoffice-fresh
+libreoffice-fresh-pt-br
+
+# --- Jogos -------------------------------------------------
+steam
+gamemode
+lib32-gamemode
+mangohud
+lib32-mangohud
+lutris
+wine
+gamescope
+
+# --- Central Gamer (app proprio) ---------------------------
+python
+pyside6
+python-psutil
+
+# --- Instalador (vem do repositorio local gerado do AUR) ---
+calamares
+ckbcomp

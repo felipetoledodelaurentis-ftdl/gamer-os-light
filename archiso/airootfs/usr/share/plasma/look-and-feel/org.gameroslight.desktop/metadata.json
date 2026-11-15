@@ -1,0 +1,13 @@
+{
+    "KPackageStructure": "Plasma/LookAndFeel",
+    "KPlugin": {
+        "Authors": [ { "Name": "Gamer OS Light" } ],
+        "Category": "",
+        "Description": "Visual escuro e moderno do Gamer OS Light, com barra de tarefas centralizada",
+        "Id": "org.gameroslight.desktop",
+        "License": "GPL-2.0+",
+        "Name": "Gamer OS Light",
+        "Version": "1.0"
+    },
+    "X-Plasma-APIVersion": "2"
+}

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Abre o instalador grafico (Calamares) com permissao de administrador.
+pgrep -x calamares >/dev/null && exit 0
+LOG=/tmp/gameros-instalador.log
+sudo -E calamares -d > "$LOG" 2>&1 && exit 0
+# Se a tela Wayland recusar, tenta pelo modo X11 (XWayland)
+sudo -E env QT_QPA_PLATFORM=xcb calamares -d >> "$LOG" 2>&1

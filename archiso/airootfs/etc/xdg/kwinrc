@@ -1,0 +1,8 @@
+[Windows]
+Placement=Centered
+
+[WindowSwitcher]
+LayoutName=thumbnail_grid
+
+[Plugins]
+blurEnabled=true

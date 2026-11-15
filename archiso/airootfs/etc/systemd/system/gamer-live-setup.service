@@ -1,0 +1,15 @@
+[Unit]
+Description=Gamer OS Light - prepara a sessao live (pen drive)
+# So roda quando o sistema foi iniciado pelo pen drive.
+# No sistema ja instalado este servico nao faz nada.
+ConditionKernelCommandLine=archisobasedir
+Before=display-manager.service
+After=systemd-sysusers.service systemd-tmpfiles-setup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/gamer-live-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[KDE]
+LookAndFeelPackage=org.gameroslight.desktop
+SingleClick=false
+widgetStyle=Breeze
+
+[General]
+ColorScheme=GamerOSLight
+AccentColor=0,229,255
+
+[Icons]
+Theme=breeze-dark

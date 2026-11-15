@@ -1,0 +1,896 @@
+#!/usr/bin/env python3
+"""
+Central Gamer - Gamer OS Light
+Monitor de desempenho, modos de energia, monitor dentro dos jogos (MangoHud),
+controles e informacoes do sistema.
+"""
+import glob
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+from collections import deque
+from pathlib import Path
+
+import psutil
+from PySide6.QtCore import Qt, QTimer, QRectF, QPointF
+from PySide6.QtGui import (QColor, QFont, QIcon, QLinearGradient, QPainter,
+                           QPainterPath, QPen)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
+                               QFrame, QGridLayout, QHBoxLayout, QLabel,
+                               QMainWindow, QMessageBox, QPushButton,
+                               QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+
+APP_NAME = "Central Gamer"
+LOGO = "/usr/share/pixmaps/gameros-logo.svg"
+HOME = Path.home()
+MANGO_CONF = HOME / ".config/MangoHud/MangoHud.conf"
+MANGO_ENV = HOME / ".config/environment.d/90-gameros-mangohud.conf"
+SETTINGS = HOME / ".config/gamer-center.conf"
+
+CYAN = "#00E5FF"
+VIOLET = "#8B5CF6"
+PINK = "#EC4899"
+GREEN = "#22C55E"
+AMBER = "#FBBF24"
+BG = "#0B0D1A"
+CARD = "#141730"
+CARD2 = "#1B1F3D"
+TEXT = "#E8EAFF"
+MUTED = "#969CBE"
+
+STYLE = f"""
+* {{ font-family: 'Noto Sans', 'Segoe UI', sans-serif; color: {TEXT}; }}
+QMainWindow, #root {{ background: {BG}; }}
+#sidebar {{ background: #0E1022; border-right: 1px solid #1F2346; }}
+#navbtn {{
+    text-align: left; padding: 12px 16px; border: none; border-radius: 10px;
+    font-size: 14px; background: transparent; color: {MUTED};
+}}
+#navbtn:hover {{ background: #171A35; color: {TEXT}; }}
+#navbtn:checked {{ background: #1C2145; color: {CYAN}; font-weight: 600; }}
+#card {{ background: {CARD}; border: 1px solid #22264A; border-radius: 16px; }}
+#title {{ font-size: 24px; font-weight: 700; }}
+#subtitle {{ color: {MUTED}; font-size: 13px; }}
+#cardtitle {{ color: {MUTED}; font-size: 12px; font-weight: 600; letter-spacing: 1px; }}
+#bigvalue {{ font-size: 30px; font-weight: 700; }}
+#hint {{ color: {MUTED}; font-size: 12px; }}
+QPushButton#action {{
+    background: {CARD2}; border: 1px solid #2B3060; border-radius: 10px;
+    padding: 10px 16px; font-size: 13px;
+}}
+QPushButton#action:hover {{ border-color: {CYAN}; }}
+QPushButton#primary {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {CYAN}, stop:1 {VIOLET});
+    border: none; border-radius: 10px; padding: 10px 18px; font-weight: 700; color: #060814;
+}}
+QPushButton#mode {{
+    background: {CARD}; border: 2px solid #22264A; border-radius: 18px;
+    padding: 18px; font-size: 15px; text-align: left;
+}}
+QPushButton#mode:hover {{ border-color: #3A4080; }}
+QPushButton#mode:checked {{ border-color: {CYAN}; background: #12233A; }}
+QPushButton#mode:disabled {{ color: #555A7A; }}
+QComboBox {{
+    background: {CARD2}; border: 1px solid #2B3060; border-radius: 8px; padding: 8px 12px;
+}}
+QComboBox QAbstractItemView {{ background: {CARD2}; selection-background-color: #24305A; }}
+QCheckBox {{ font-size: 14px; spacing: 10px; }}
+QScrollArea {{ border: none; background: transparent; }}
+QScrollArea > QWidget > QWidget {{ background: transparent; }}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Utilitarios
+# ---------------------------------------------------------------------------
+def run(cmd, timeout=3):
+    """Executa um comando e devolve a saida (ou '' se falhar)."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout).stdout.strip()
+    except Exception:
+        return ""
+
+
+def launch(cmd):
+    """Abre um programa sem travar a Central."""
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        return True
+    except Exception:
+        return False
+
+
+def read(path, default=""):
+    try:
+        return Path(path).read_text().strip()
+    except Exception:
+        return default
+
+
+def load_settings():
+    data = {}
+    for line in read(SETTINGS).splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            data[k.strip()] = v.strip()
+    return data
+
+
+def save_settings(data):
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS.write_text("".join(f"{k}={v}\n" for k, v in data.items()))
+
+
+# ---------------------------------------------------------------------------
+# Leitura de hardware
+# ---------------------------------------------------------------------------
+class GPU:
+    """Le uso, temperatura e memoria da placa de video (AMD, NVIDIA ou Intel)."""
+
+    def __init__(self):
+        self.kind = None
+        self.name = "Não detectada"
+        self.card = None
+        self.driver = ""
+        self._detect()
+
+    def _detect(self):
+        if shutil.which("nvidia-smi"):
+            name = run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+            if name:
+                self.kind, self.name, self.driver = "nvidia", name.splitlines()[0], "nvidia"
+                return
+        for dev in sorted(glob.glob("/sys/class/drm/card[0-9]*/device")):
+            vendor = read(f"{dev}/vendor")
+            if vendor == "0x1002" and os.path.exists(f"{dev}/gpu_busy_percent"):
+                self.kind, self.card = "amd", dev
+                break
+            if vendor == "0x8086" and self.kind is None:
+                self.kind, self.card = "intel", dev
+        names = gpu_names()
+        if names:
+            self.name = names[0][0]
+            self.driver = names[0][1]
+            if self.kind == "amd":
+                for n, d in names:
+                    if "AMD" in n or "ATI" in n or "Radeon" in n:
+                        self.name, self.driver = n, d
+
+    def stats(self):
+        """Devolve (uso %, temperatura C, vram usada MB, vram total MB)."""
+        try:
+            if self.kind == "nvidia":
+                out = run(["nvidia-smi",
+                           "--query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total",
+                           "--format=csv,noheader,nounits"])
+                u, t, mu, mt = [float(x) for x in out.splitlines()[0].split(",")]
+                return u, t, mu, mt
+            if self.kind == "amd":
+                d = self.card
+                u = float(read(f"{d}/gpu_busy_percent", "0"))
+                mu = float(read(f"{d}/mem_info_vram_used", "0")) / 1048576
+                mt = float(read(f"{d}/mem_info_vram_total", "0")) / 1048576
+                t = None
+                for h in glob.glob(f"{d}/hwmon/hwmon*/temp1_input"):
+                    t = float(read(h, "0")) / 1000
+                return u, t, mu, mt
+            if self.kind == "intel":
+                for h in glob.glob(f"{self.card}/hwmon/hwmon*/temp1_input"):
+                    return None, float(read(h, "0")) / 1000, None, None
+        except Exception:
+            pass
+        return None, None, None, None
+
+
+def gpu_names():
+    """Lista (nome, driver em uso) de cada placa de video via lspci."""
+    out = run(["lspci", "-k"])
+    result, current = [], None
+    for line in out.splitlines():
+        if re.search(r"VGA compatible|3D controller|Display controller", line):
+            current = line.split(": ", 1)[-1]
+            current = re.sub(r"\s*\(rev .*\)$", "", current)
+            result.append([current, ""])
+        elif current and "Kernel driver in use" in line:
+            result[-1][1] = line.split(":", 1)[1].strip()
+            current = None
+    return [tuple(r) for r in result]
+
+
+def cpu_temp():
+    try:
+        temps = psutil.sensors_temperatures()
+    except Exception:
+        return None
+    for key in ("k10temp", "zenpower", "coretemp", "cpu_thermal", "acpitz"):
+        for entry in temps.get(key, []):
+            if key != "coretemp" or entry.label.startswith("Package"):
+                return entry.current
+    return None
+
+
+def cpu_name():
+    for line in read("/proc/cpuinfo").splitlines():
+        if line.startswith("model name"):
+            return re.sub(r"\s+", " ", line.split(":", 1)[1]).strip()
+    return platform.processor() or "Processador"
+
+
+def gamepads():
+    """Controles conectados (lidos de /proc/bus/input/devices)."""
+    found = []
+    for block in read("/proc/bus/input/devices").split("\n\n"):
+        name = re.search(r'N: Name="(.*)"', block)
+        handlers = re.search(r"H: Handlers=(.*)", block)
+        if name and handlers and re.search(r"\bjs\d+", handlers.group(1)):
+            n = name.group(1)
+            low = n.lower()
+            if any(k in low for k in ("xbox", "microsoft", "x-box")):
+                kind = "Xbox"
+            elif any(k in low for k in ("sony", "dualsense", "dualshock", "playstation", "wireless controller")):
+                kind = "PlayStation"
+            else:
+                kind = "Controle"
+            if n not in [f[0] for f in found]:
+                found.append((n, kind))
+    return found
+
+
+# ---------------------------------------------------------------------------
+# Componentes visuais
+# ---------------------------------------------------------------------------
+class Sparkline(QWidget):
+    """Grafico pequeno com o historico dos ultimos segundos."""
+
+    def __init__(self, color, maximum=100.0, parent=None):
+        super().__init__(parent)
+        self.color = QColor(color)
+        self.maximum = maximum
+        self.values = deque([0.0] * 60, maxlen=60)
+        self.setMinimumHeight(56)
+
+    def push(self, value):
+        self.values.append(max(0.0, float(value or 0)))
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        n = len(self.values)
+        top = max(self.maximum, max(self.values) or 1)
+        pts = [QPointF(i * w / (n - 1), h - 2 - (v / top) * (h - 6))
+               for i, v in enumerate(self.values)]
+        path = QPainterPath(pts[0])
+        for pt in pts[1:]:
+            path.lineTo(pt)
+        fill = QPainterPath(path)
+        fill.lineTo(w, h)
+        fill.lineTo(0, h)
+        fill.closeSubpath()
+        grad = QLinearGradient(0, 0, 0, h)
+        c1 = QColor(self.color)
+        c1.setAlpha(110)
+        c2 = QColor(self.color)
+        c2.setAlpha(0)
+        grad.setColorAt(0, c1)
+        grad.setColorAt(1, c2)
+        p.fillPath(fill, grad)
+        p.setPen(QPen(self.color, 2))
+        p.drawPath(path)
+
+
+class Ring(QWidget):
+    """Medidor circular (porcentagem)."""
+
+    def __init__(self, color, parent=None):
+        super().__init__(parent)
+        self.color = QColor(color)
+        self.value = 0.0
+        self.setFixedSize(76, 76)
+
+    def set(self, value):
+        self.value = max(0.0, min(100.0, float(value or 0)))
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(6, 6, self.width() - 12, self.height() - 12)
+        p.setPen(QPen(QColor("#262A50"), 8, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(r, 0, 360 * 16)
+        p.setPen(QPen(self.color, 8, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(r, 90 * 16, int(-self.value * 3.6 * 16))
+        p.setPen(QColor(TEXT))
+        f = QFont()
+        f.setPointSize(11)
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(r, Qt.AlignCenter, f"{self.value:.0f}%")
+
+
+class Toggle(QCheckBox):
+    """Chave liga/desliga no estilo do Windows 11."""
+
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(30)
+
+    def sizeHint(self):
+        sh = super().sizeHint()
+        return sh.expandedTo(sh.__class__(sh.width() + 30, 30))
+
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        h = 24
+        y = (self.height() - h) / 2
+        track = QRectF(0, y, 46, h)
+        on = self.isChecked()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(CYAN if on else "#2A2E52"))
+        p.drawRoundedRect(track, h / 2, h / 2)
+        p.setBrush(QColor("#060814" if on else "#C9CCE8"))
+        knob_x = 46 - h + 4 if on else 4
+        p.drawEllipse(QRectF(knob_x, y + 4, h - 8, h - 8))
+        p.setPen(QColor(TEXT))
+        f = self.font()
+        f.setPointSize(11)
+        p.setFont(f)
+        p.drawText(QRectF(58, 0, self.width() - 58, self.height()),
+                   Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
+
+def card(parent=None):
+    f = QFrame(parent)
+    f.setObjectName("card")
+    return f
+
+
+def label(text, name=None, wrap=False):
+    lb = QLabel(text)
+    if name:
+        lb.setObjectName(name)
+    lb.setWordWrap(wrap)
+    return lb
+
+
+def button(text, name="action", slot=None):
+    b = QPushButton(text)
+    b.setObjectName(name)
+    b.setCursor(Qt.PointingHandCursor)
+    if slot:
+        b.clicked.connect(slot)
+    return b
+
+
+class StatCard(QFrame):
+    """Cartao com titulo, valor grande, detalhe, medidor e grafico."""
+
+    def __init__(self, title, color, show_ring=True):
+        super().__init__()
+        self.setObjectName("card")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 14)
+        top = QHBoxLayout()
+        texts = QVBoxLayout()
+        self.title = label(title.upper(), "cardtitle")
+        self.value = label("--", "bigvalue")
+        self.detail = label("", "hint", wrap=True)
+        texts.addWidget(self.title)
+        texts.addWidget(self.value)
+        texts.addWidget(self.detail)
+        top.addLayout(texts, 1)
+        self.ring = Ring(color) if show_ring else None
+        if self.ring:
+            top.addWidget(self.ring, 0, Qt.AlignTop)
+        lay.addLayout(top)
+        self.spark = Sparkline(color)
+        lay.addWidget(self.spark)
+
+    def update_values(self, value_text, detail, percent):
+        self.value.setText(value_text)
+        self.detail.setText(detail)
+        if self.ring is not None:
+            self.ring.setVisible(percent is not None)
+            if percent is not None:
+                self.ring.set(percent)
+        self.spark.push(percent or 0)
+
+
+# ---------------------------------------------------------------------------
+# Paginas
+# ---------------------------------------------------------------------------
+def page_header(title, subtitle):
+    w = QWidget()
+    lay = QVBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 8)
+    lay.addWidget(label(title, "title"))
+    lay.addWidget(label(subtitle, "subtitle", wrap=True))
+    return w
+
+
+class PerformancePage(QWidget):
+    def __init__(self, gpu):
+        super().__init__()
+        self.gpu = gpu
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 24)
+        lay.addWidget(page_header("Desempenho",
+                                  "Uso do computador em tempo real. Dentro dos jogos, o FPS "
+                                  "aparece no canto da tela quando o Monitor nos jogos está ligado."))
+        grid = QGridLayout()
+        grid.setSpacing(16)
+        self.cpu = StatCard("Processador", CYAN)
+        self.gpu_card = StatCard("Placa de vídeo", VIOLET)
+        self.ram = StatCard("Memória RAM", GREEN)
+        self.vram = StatCard("Memória de vídeo", PINK)
+        grid.addWidget(self.cpu, 0, 0)
+        grid.addWidget(self.gpu_card, 0, 1)
+        grid.addWidget(self.ram, 1, 0)
+        grid.addWidget(self.vram, 1, 1)
+        lay.addLayout(grid)
+
+        fps = card()
+        fl = QHBoxLayout(fps)
+        fl.setContentsMargins(18, 14, 18, 14)
+        col = QVBoxLayout()
+        col.addWidget(label("FPS NOS JOGOS", "cardtitle"))
+        self.fps_status = label("", "bigvalue")
+        col.addWidget(self.fps_status)
+        col.addWidget(label("Shift direito + F12 mostra ou esconde o monitor durante o jogo.", "hint"))
+        fl.addLayout(col, 1)
+        self.fps_btn = button("Configurar", "action")
+        fl.addWidget(self.fps_btn, 0, Qt.AlignVCenter)
+        lay.addWidget(fps)
+        lay.addStretch(1)
+
+        psutil.cpu_percent(interval=None)
+        self.cpu_label = cpu_name()
+        self.cores = psutil.cpu_count(logical=True) or 1
+
+    def refresh(self):
+        c = psutil.cpu_percent(interval=None)
+        freq = psutil.cpu_freq()
+        t = cpu_temp()
+        detail = self.cpu_label
+        extra = []
+        if freq and freq.current:
+            extra.append(f"{freq.current / 1000:.2f} GHz")
+        if t:
+            extra.append(f"{t:.0f} °C")
+        extra.append(f"{self.cores} núcleos")
+        self.cpu.update_values(f"{c:.0f}%", f"{detail}\n{'  •  '.join(extra)}", c)
+
+        u, gt, mu, mt = self.gpu.stats()
+        gd = [self.gpu.name]
+        if gt:
+            gd.append(f"{gt:.0f} °C")
+        self.gpu_card.update_values(f"{u:.0f}%" if u is not None else "n/d",
+                                    "  •  ".join(gd), u)
+
+        m = psutil.virtual_memory()
+        self.ram.update_values(f"{m.used / 2**30:.1f} GB",
+                               f"de {m.total / 2**30:.1f} GB  •  {m.percent:.0f}% em uso", m.percent)
+
+        if mu is not None and mt:
+            pct = mu / mt * 100
+            self.vram.update_values(f"{mu / 1024:.1f} GB", f"de {mt / 1024:.1f} GB  •  {pct:.0f}% em uso", pct)
+        else:
+            self.vram.update_values("n/d", "Não disponível para esta placa", None)
+
+        on = MANGO_ENV.exists()
+        self.fps_status.setText("Ligado" if on else "Desligado")
+        self.fps_status.setStyleSheet(f"color: {GREEN if on else MUTED};")
+
+
+class PowerPage(QWidget):
+    MODES = [
+        ("power-saver", "Economia de energia",
+         "Menos consumo e menos calor. Ideal para notebook na bateria, navegar e assistir vídeos."),
+        ("balanced", "Normal",
+         "Equilíbrio entre desempenho e consumo. Bom para o dia a dia."),
+        ("performance", "Alta performance",
+         "Processador e placa de vídeo no máximo. Use para jogar."),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 24)
+        lay.addWidget(page_header("Modo de energia",
+                                  "Escolha como o computador deve se comportar. A troca é imediata."))
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.buttons = {}
+        icons = {"power-saver": "🍃", "balanced": "⚖️", "performance": "🚀"}
+        for key, title, desc in self.MODES:
+            b = QPushButton(f"{icons[key]}   {title}\n{desc}")
+            b.setObjectName("mode")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumHeight(86)
+            b.clicked.connect(lambda _=False, k=key: self.set_mode(k))
+            self.group.addButton(b)
+            self.buttons[key] = b
+            lay.addWidget(b)
+        self.status = label("", "hint", wrap=True)
+        lay.addWidget(self.status)
+
+        gm = card()
+        gl = QVBoxLayout(gm)
+        gl.setContentsMargins(18, 14, 18, 14)
+        gl.addWidget(label("GAMEMODE", "cardtitle"))
+        gl.addWidget(label(
+            "O GameMode deixa o jogo com prioridade máxima enquanto ele estiver aberto. "
+            "Na Steam, clique com o botão direito no jogo, Propriedades, e em Opções de "
+            "inicialização escreva:  gamemoderun %command%", wrap=True))
+        lay.addWidget(gm)
+        lay.addStretch(1)
+        self.refresh()
+
+    def available(self):
+        out = run(["powerprofilesctl", "list"])
+        found = set(re.findall(r"^\s*\*?\s*([\w-]+):\s*$", out, re.M))
+        return found
+
+    def refresh(self):
+        if not shutil.which("powerprofilesctl"):
+            for b in self.buttons.values():
+                b.setEnabled(False)
+            self.status.setText("O serviço de energia (power-profiles-daemon) não está instalado.")
+            return
+        avail = self.available()
+        current = run(["powerprofilesctl", "get"])
+        for key, b in self.buttons.items():
+            b.setEnabled(not avail or key in avail)
+            b.setChecked(key == current)
+        if avail and "performance" not in avail:
+            self.status.setText("Este processador não oferece o modo Alta performance pelo sistema.")
+        else:
+            self.status.setText("")
+
+    def set_mode(self, key):
+        r = subprocess.run(["powerprofilesctl", "set", key], capture_output=True, text=True)
+        if r.returncode != 0:
+            QMessageBox.warning(self, APP_NAME,
+                                "Não foi possível trocar o modo de energia.\n\n" + (r.stderr or "").strip())
+        self.refresh()
+
+
+class OverlayPage(QWidget):
+    PRESETS = {
+        "Somente FPS": ["fps", "fps_only"],
+        "Básico (FPS, CPU e GPU)": ["fps", "frametime", "cpu_stats", "gpu_stats"],
+        "Completo": ["fps", "fps_color_change", "frametime", "frame_timing", "cpu_stats",
+                     "cpu_temp", "gpu_stats", "gpu_temp", "vram", "ram", "gamemode"],
+    }
+    POSITIONS = {
+        "Superior esquerdo": "top-left",
+        "Superior direito": "top-right",
+        "Inferior esquerdo": "bottom-left",
+        "Inferior direito": "bottom-right",
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.settings = load_settings()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 24)
+        lay.addWidget(page_header("Monitor nos jogos",
+                                  "Mostra FPS, processador, placa de vídeo e memória por cima do jogo, "
+                                  "em tempo real."))
+        c = card()
+        cl = QVBoxLayout(c)
+        cl.setContentsMargins(20, 18, 20, 18)
+        cl.setSpacing(14)
+        self.toggle = Toggle("Mostrar o monitor em todos os jogos")
+        self.toggle.setChecked(MANGO_ENV.exists())
+        self.toggle.toggled.connect(self.apply)
+        cl.addWidget(self.toggle)
+
+        row = QGridLayout()
+        row.addWidget(label("O que mostrar"), 0, 0)
+        self.preset = QComboBox()
+        self.preset.addItems(self.PRESETS.keys())
+        self.preset.setCurrentText(self.settings.get("preset", "Completo"))
+        row.addWidget(self.preset, 0, 1)
+        row.addWidget(label("Posição na tela"), 1, 0)
+        self.pos = QComboBox()
+        self.pos.addItems(self.POSITIONS.keys())
+        self.pos.setCurrentText(self.settings.get("position", "Superior esquerdo"))
+        row.addWidget(self.pos, 1, 1)
+        cl.addLayout(row)
+        self.preset.currentTextChanged.connect(self.apply)
+        self.pos.currentTextChanged.connect(self.apply)
+
+        btns = QHBoxLayout()
+        btns.addWidget(button("Testar agora", "primary", self.test))
+        btns.addWidget(button("Reiniciar a Steam com o monitor", "action", self.restart_steam))
+        btns.addStretch(1)
+        cl.addLayout(btns)
+        lay.addWidget(c)
+
+        tips = card()
+        tl = QVBoxLayout(tips)
+        tl.setContentsMargins(18, 14, 18, 14)
+        tl.addWidget(label("DICAS", "cardtitle"))
+        tl.addWidget(label(
+            "Depois de ligar, saia da sessão e entre de novo (ou use o botão de reiniciar a Steam) "
+            "para que todos os jogos passem a mostrar o monitor.\n\n"
+            "Durante o jogo, Shift direito + F12 mostra ou esconde o monitor.\n\n"
+            "Se quiser o monitor só em um jogo da Steam, deixe a opção desligada e coloque nas "
+            "Opções de inicialização do jogo:  mangohud %command%", wrap=True))
+        lay.addWidget(tips)
+        self.status = label("", "hint", wrap=True)
+        lay.addWidget(self.status)
+        lay.addStretch(1)
+
+    def write_config(self):
+        keys = self.PRESETS[self.preset.currentText()]
+        pos = self.POSITIONS[self.pos.currentText()]
+        lines = [
+            "# Gamer OS Light - gerado pela Central Gamer. Shift direito + F12 mostra/oculta.",
+            "legacy_layout=false", f"position={pos}", "round_corners=8", "background_alpha=0.5",
+            "font_size=20", "text_color=E8EAFF", "gpu_color=8B5CF6", "cpu_color=00E5FF",
+            "vram_color=EC4899", "ram_color=22C55E", "frametime_color=00E5FF",
+            "toggle_hud=Shift_R+F12",
+        ] + keys
+        MANGO_CONF.parent.mkdir(parents=True, exist_ok=True)
+        MANGO_CONF.write_text("\n".join(lines) + "\n")
+        self.settings.update(preset=self.preset.currentText(), position=self.pos.currentText())
+        save_settings(self.settings)
+
+    def apply(self, *_):
+        self.write_config()
+        if self.toggle.isChecked():
+            MANGO_ENV.parent.mkdir(parents=True, exist_ok=True)
+            MANGO_ENV.write_text("# Liga o monitor (MangoHud) em todos os jogos\nMANGOHUD=1\n")
+            run(["systemctl", "--user", "set-environment", "MANGOHUD=1"])
+            self.status.setText("Monitor ligado. Saia e entre na sessão para valer em todos os jogos.")
+        else:
+            if MANGO_ENV.exists():
+                MANGO_ENV.unlink()
+            run(["systemctl", "--user", "unset-environment", "MANGOHUD"])
+            self.status.setText("Monitor desligado.")
+
+    def test(self):
+        self.write_config()
+        if not shutil.which("mangohud"):
+            QMessageBox.warning(self, APP_NAME, "O MangoHud não está instalado.")
+            return
+        demo = "vkcube" if shutil.which("vkcube") else "glxgears"
+        launch(["mangohud", demo])
+
+    def restart_steam(self):
+        self.write_config()
+        if not shutil.which("steam"):
+            QMessageBox.information(self, APP_NAME, "A Steam não está instalada.")
+            return
+        run(["pkill", "-TERM", "-x", "steam"])
+        env = dict(os.environ, MANGOHUD="1")
+        subprocess.Popen(["bash", "-c", "sleep 3; exec steam"], env=env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        self.status.setText("A Steam vai abrir de novo com o monitor ligado.")
+
+
+class ControllersPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 24)
+        lay.addWidget(page_header("Controles",
+                                  "Controles de Xbox e PlayStation funcionam por cabo USB, Bluetooth ou adaptador sem fio."))
+        self.list_card = card()
+        self.list_lay = QVBoxLayout(self.list_card)
+        self.list_lay.setContentsMargins(18, 14, 18, 14)
+        lay.addWidget(self.list_card)
+
+        btns = QHBoxLayout()
+        btns.addWidget(button("Parear controle por Bluetooth", "primary",
+                              lambda: launch(["systemsettings", "kcm_bluetooth"])))
+        btns.addWidget(button("Testar botões", "action",
+                              lambda: launch(["systemsettings", "kcm_gamecontroller"])))
+        btns.addStretch(1)
+        lay.addLayout(btns)
+
+        tips = card()
+        tl = QVBoxLayout(tips)
+        tl.setContentsMargins(18, 14, 18, 14)
+        tl.addWidget(label("COMO PAREAR", "cardtitle"))
+        tl.addWidget(label(
+            "Xbox: segure o botão de parear (em cima do controle, perto da entrada USB) ate o "
+            "logo piscar rapido.\n\n"
+            "PS4 (DualShock 4): segure Share + PS até a luz piscar.\n\n"
+            "PS5 (DualSense): segure Create + PS até a luz piscar.\n\n"
+            "Depois clique em Parear controle por Bluetooth e escolha o controle na lista. "
+            "Na Steam, os controles são configurados em Configurações > Controle.", wrap=True))
+        lay.addWidget(tips)
+        lay.addStretch(1)
+        self._last = None
+        self.refresh()
+
+    def refresh(self):
+        pads = gamepads()
+        if pads == self._last:
+            return
+        self._last = pads
+        while self.list_lay.count():
+            item = self.list_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.list_lay.addWidget(label("CONECTADOS AGORA", "cardtitle"))
+        if not pads:
+            self.list_lay.addWidget(label("Nenhum controle conectado.", "hint"))
+        for name, kind in pads:
+            icon = {"Xbox": "🟢", "PlayStation": "🔵"}.get(kind, "🎮")
+            self.list_lay.addWidget(label(f"{icon}  {kind}  —  {name}"))
+
+
+class SystemPage(QWidget):
+    def __init__(self, gpu):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 24)
+        lay.addWidget(page_header("Sistema", "Informações do computador e atalhos úteis."))
+        info = card()
+        il = QGridLayout(info)
+        il.setContentsMargins(20, 18, 20, 18)
+        il.setVerticalSpacing(10)
+        mem = psutil.virtual_memory().total / 2**30
+        disk = psutil.disk_usage("/")
+        rows = [
+            ("Sistema", "Gamer OS Light"),
+            ("Kernel Linux", platform.release()),
+            ("Processador", cpu_name()),
+            ("Memória", f"{mem:.1f} GB"),
+            ("Disco (sistema)", f"{disk.used / 2**30:.0f} GB usados de {disk.total / 2**30:.0f} GB"),
+        ]
+        for n, (gname, drv) in enumerate(gpu_names() or [(gpu.name, gpu.driver)]):
+            rows.append((f"Placa de vídeo {n + 1}" if n else "Placa de vídeo",
+                         f"{gname}  (driver: {friendly_driver(drv)})"))
+        for i, (k, v) in enumerate(rows):
+            il.addWidget(label(k, "hint"), i, 0)
+            val = label(v, wrap=True)
+            val.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            il.addWidget(val, i, 1)
+        il.setColumnStretch(1, 1)
+        lay.addWidget(info)
+
+        btns = QGridLayout()
+        btns.addWidget(button("Atualizar o sistema", "primary", self.update_system), 0, 0)
+        btns.addWidget(button("Loja de aplicativos", "action",
+                              lambda: launch(["plasma-discover"])), 0, 1)
+        btns.addWidget(button("Configurações", "action",
+                              lambda: launch(["systemsettings"])), 1, 0)
+        btns.addWidget(button("Monitor do sistema (detalhado)", "action",
+                              lambda: launch(["plasma-systemmonitor"])), 1, 1)
+        lay.addLayout(btns)
+        lay.addStretch(1)
+
+    def update_system(self):
+        launch(["konsole", "--hold", "-e", "bash", "-c",
+                "echo 'Atualizando o Gamer OS Light...'; sudo pacman -Syu"])
+
+
+def friendly_driver(drv):
+    return {
+        "nvidia": "NVIDIA proprietário",
+        "nouveau": "NVIDIA código aberto (básico)",
+        "amdgpu": "AMD",
+        "radeon": "AMD antigo",
+        "i915": "Intel",
+        "xe": "Intel",
+    }.get(drv, drv or "nenhum")
+
+
+# ---------------------------------------------------------------------------
+# Janela principal
+# ---------------------------------------------------------------------------
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"{APP_NAME} — Gamer OS Light")
+        if os.path.exists(LOGO):
+            self.setWindowIcon(QIcon(LOGO))
+        self.resize(1080, 760)
+        root = QWidget()
+        root.setObjectName("root")
+        h = QHBoxLayout(root)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+
+        side = QFrame()
+        side.setObjectName("sidebar")
+        side.setFixedWidth(230)
+        sl = QVBoxLayout(side)
+        sl.setContentsMargins(14, 20, 14, 20)
+        sl.setSpacing(4)
+        brand = QHBoxLayout()
+        if os.path.exists(LOGO):
+            logo = QLabel()
+            logo.setPixmap(QIcon(LOGO).pixmap(36, 36))
+            brand.addWidget(logo)
+        bt = QVBoxLayout()
+        bt.setSpacing(0)
+        bt.addWidget(label("Central Gamer", None))
+        bt.itemAt(0).widget().setStyleSheet("font-size: 16px; font-weight: 700;")
+        bt.addWidget(label("Gamer OS Light", "hint"))
+        brand.addLayout(bt, 1)
+        sl.addLayout(brand)
+        sl.addSpacing(18)
+
+        self.gpu = GPU()
+        self.stack = QStackedWidget()
+        self.perf = PerformancePage(self.gpu)
+        self.power = PowerPage()
+        self.overlay = OverlayPage()
+        self.pads = ControllersPage()
+        self.system = SystemPage(self.gpu)
+        pages = [("📊   Desempenho", self.perf), ("⚡   Energia", self.power),
+                 ("🎯   Monitor nos jogos", self.overlay), ("🎮   Controles", self.pads),
+                 ("🖥️   Sistema", self.system)]
+        self.nav = QButtonGroup(self)
+        for i, (text, page) in enumerate(pages):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(page)
+            self.stack.addWidget(scroll)
+            b = QPushButton(text)
+            b.setObjectName("navbtn")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, i=i: self.stack.setCurrentIndex(i))
+            self.nav.addButton(b, i)
+            sl.addWidget(b)
+        self.nav.button(0).setChecked(True)
+        self.perf.fps_btn.clicked.connect(lambda: self.nav.button(2).click())
+        sl.addStretch(1)
+        sl.addWidget(label("Versão 1.0", "hint"))
+
+        h.addWidget(side)
+        h.addWidget(self.stack, 1)
+        self.setCentralWidget(root)
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.tick)
+        self.timer.start(1000)
+        self.slow = 0
+        self.tick()
+
+    def tick(self):
+        self.perf.refresh()
+        self.slow += 1
+        if self.slow % 3 == 0:
+            self.pads.refresh()
+            if self.stack.currentIndex() == 1:
+                self.power.refresh()
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setDesktopFileName("gamer-center")
+    app.setStyle("Fusion")
+    app.setStyleSheet(STYLE)
+    w = MainWindow()
+    if "--page" in sys.argv:
+        idx = sys.argv.index("--page") + 1
+        if idx < len(sys.argv) and sys.argv[idx].isdigit():
+            w.nav.button(int(sys.argv[idx])).click()
+    w.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

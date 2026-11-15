@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Prepara a sessao live do Gamer OS Light (so roda no pen drive).
+set -u
+
+LIVE_USER=gamer
+
+# Idioma portugues do Brasil
+sed -i -e 's/^#\(pt_BR.UTF-8 UTF-8\)/\1/' -e 's/^#\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen >/dev/null 2>&1 || true
+
+# Usuario do modo live, sem senha
+if ! id "$LIVE_USER" >/dev/null 2>&1; then
+    groups="wheel,audio,video,input,storage,network"
+    getent group gamemode >/dev/null && groups="$groups,gamemode"
+    useradd -m -G "$groups" -s /bin/bash -c "Gamer OS Light" "$LIVE_USER"
+    passwd -d "$LIVE_USER" >/dev/null
+fi
+echo "$LIVE_USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/99-gameros-live
+chmod 440 /etc/sudoers.d/99-gameros-live
+
+# Entra direto na area de trabalho
+cat > /etc/sddm.conf.d/90-gameros-live.conf <<EOF
+[Autologin]
+User=$LIVE_USER
+Session=plasma
+Relogin=false
+EOF
+
+# Atalho "Instalar Gamer OS Light" (menu, area de trabalho e abre sozinho)
+install -Dm644 /usr/share/gameros/gameros-install.desktop /usr/share/applications/gameros-install.desktop
+home="/home/$LIVE_USER"
+runuser -u "$LIVE_USER" -- env LANG=pt_BR.UTF-8 xdg-user-dirs-update >/dev/null 2>&1 || true
+desk="$(runuser -u "$LIVE_USER" -- env LANG=pt_BR.UTF-8 xdg-user-dir DESKTOP 2>/dev/null)"
+[ -n "$desk" ] || desk="$home/Desktop"
+install -Dm755 -o "$LIVE_USER" -g "$LIVE_USER" /usr/share/gameros/gameros-install.desktop "$desk/gameros-install.desktop"
+install -Dm644 -o "$LIVE_USER" -g "$LIVE_USER" /usr/share/gameros/gameros-install.desktop "$home/.config/autostart/gameros-install.desktop"
+chown -R "$LIVE_USER:$LIVE_USER" "$home/.config"
+
+exit 0

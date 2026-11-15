@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# =============================================================
+#  Gamer OS Light - pos-instalacao
+#  Roda DENTRO do sistema recem-instalado (chroot), chamado pelo
+#  instalador. Remove o que e so do pen drive, ajusta o boot,
+#  e deixa apenas o driver de video certo para a placa do PC.
+# =============================================================
+set -u
+log() { echo "[gameros-postinstall] $*"; }
+
+# --- Kernel em /boot (o pen drive guarda o kernel fora do sistema) ---
+for k in /usr/lib/modules/*/vmlinuz; do
+    [ -f "$k" ] || continue
+    base="$(cat "$(dirname "$k")/pkgbase" 2>/dev/null || echo linux)"
+    install -Dm644 "$k" "/boot/vmlinuz-$base"
+    log "kernel copiado: /boot/vmlinuz-$base"
+done
+
+# --- mkinitcpio volta ao padrao (sem os ganchos do pen drive) ---
+rm -f /etc/mkinitcpio.conf.d/archiso.conf
+for k in /usr/lib/modules/*/pkgbase; do
+    base="$(cat "$k")"
+    cat > "/etc/mkinitcpio.d/$base.preset" <<EOF
+# mkinitcpio preset para '$base'
+ALL_kver="/boot/vmlinuz-$base"
+PRESETS=('default' 'fallback')
+default_image="/boot/initramfs-$base.img"
+fallback_image="/boot/initramfs-$base-fallback.img"
+fallback_options="-S autodetect"
+EOF
+done
+
+# --- Remove configuracoes que so fazem sentido no pen drive ---
+rm -rf /etc/systemd/system/getty@tty1.service.d \
+       /etc/systemd/system/etc-pacman.d-gnupg.mount \
+       /etc/systemd/system/pacman-init.service \
+       /etc/systemd/system/multi-user.target.wants/pacman-init.service \
+       /etc/systemd/journald.conf.d/volatile-storage.conf \
+       /etc/systemd/logind.conf.d/do-not-suspend.conf \
+       /etc/ssh/sshd_config.d/10-archiso.conf \
+       /etc/sudoers.d/99-gameros-live \
+       /etc/sddm.conf.d/90-gameros-live.conf \
+       /etc/motd \
+       /root/.automated_script.sh /root/.zlogin \
+       /usr/local/bin/choose-mirror /usr/local/bin/Installation_guide /usr/local/bin/livecd-sound \
+       /usr/share/applications/gameros-install.desktop
+find /etc/systemd/system -name 'etc-pacman.d-gnupg.mount' -delete 2>/dev/null
+
+# root sem senha no pen drive -> bloqueado no sistema instalado (usa-se sudo)
+passwd -l root >/dev/null 2>&1 || true
+
+# --- Chaves do pacman (para atualizacoes funcionarem) ---
+pacman-key --init >/dev/null 2>&1
+pacman-key --populate archlinux >/dev/null 2>&1
+log "chaves do pacman prontas"
+
+# --- Driver de video ---
+gpus="$(lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display')"
+log "placas detectadas: $gpus"
+if ! echo "$gpus" | grep -qi nvidia; then
+    log "sem placa NVIDIA: removendo driver NVIDIA"
+    pacman -Rns --noconfirm nvidia-settings lib32-nvidia-utils nvidia-open nvidia-utils >/dev/null 2>&1 || true
+else
+    log "placa NVIDIA encontrada: driver NVIDIA mantido"
+    for s in nvidia-suspend nvidia-resume nvidia-hibernate; do
+        systemctl enable "$s.service" >/dev/null 2>&1 || true
+    done
+fi
+
+# --- Dual boot: procurar Windows e outros sistemas no menu de inicializacao ---
+if [ -f /etc/default/grub ]; then
+    if grep -q 'GRUB_DISABLE_OS_PROBER' /etc/default/grub; then
+        sed -i 's/^#\?GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub
+    else
+        echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub
+    fi
+    sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="Gamer OS Light"/' /etc/default/grub
+fi
+
+# --- Remove o instalador do sistema final ---
+pacman -Rns --noconfirm calamares >/dev/null 2>&1 || true
+pacman -Rns --noconfirm ckbcomp   >/dev/null 2>&1 || true
+
+# --- Pastas padrao (Documentos, Downloads...) em portugues ---
+sed -i 's/^#\(pt_BR.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen >/dev/null 2>&1 || true
+
+log "concluido"
+exit 0

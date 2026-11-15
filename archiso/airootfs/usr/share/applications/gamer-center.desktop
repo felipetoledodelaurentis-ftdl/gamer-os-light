@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Central Gamer
+GenericName=Desempenho e jogos
+Comment=Monitor de FPS, processador e memória, modos de energia e controles
+Exec=/usr/local/bin/gamer-center
+Icon=/usr/share/pixmaps/gameros-logo.svg
+Terminal=false
+Categories=Game;System;Monitor;
+Keywords=fps;desempenho;energia;mangohud;controle;gamer;
+StartupWMClass=gamer-center

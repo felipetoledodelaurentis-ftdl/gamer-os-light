@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Instalar Gamer OS Light
+Name[en]=Install Gamer OS Light
+Comment=Instala o Gamer OS Light no seu computador
+Exec=/usr/local/bin/gameros-install
+Icon=/usr/share/pixmaps/gameros-logo.png
+Terminal=false
+Categories=System;
