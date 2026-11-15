@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+ #!/usr/bin/env bash
 # =============================================================
 #  Gamer OS Light - gera a ISO
 #  Roda como root dentro de um container Arch Linux (privilegiado).
@@ -82,7 +82,7 @@ EOF
 
 # Configuracoes padrao do Calamares para modulos que nao personalizamos
 # (copiadas do codigo-fonte compilado, caso o pacote nao as instale)
-CALSRC="$(find /tmp/aurbuild/calamares/src -maxdepth 1 -type d -name 'calamares-*' 2>/dev/null | head -n1)"
+CALSRC="$(find /tmp/aurbuild/calamares/src -maxdepth 1 -type d -name 'calamares-*' 2>/dev/null | head -n1)"  || true
 if [ -n "$CALSRC" ]; then
     for f in "$CALSRC"/src/modules/*/*.conf; do
         b="$(basename "$f")"
